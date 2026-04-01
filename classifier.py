@@ -206,13 +206,146 @@ class Classifier:
         """
         Train the Logistic Regression model and store learned parameters in self.model_state.
         """
-        raise NotImplementedError("Logistic Regression training has not been implemented yet.")
+        x_raw = np.asarray(training_data[:, 1:], dtype=float)
+        y_raw = np.asarray(training_data[:, 0])
+
+        classes = np.array(self.model_state["classes"])
+        n_classes = len(classes)
+
+        learning_rate = self.params.get("learning_rate")
+        if learning_rate is None:
+            learning_rate = 0.1
+
+        num_iterations = self.params.get("num_iterations")
+        if num_iterations is None:
+            num_iterations = 3000
+
+        reg_strength = self.params.get("reg_strength")
+        if reg_strength is None:
+            reg_strength = 0.001
+
+        categorical_unique_threshold = self.params.get("categorical_unique_threshold")
+        if categorical_unique_threshold is None:
+            categorical_unique_threshold = 20
+
+        # Fit preprocessing rules on training data
+        feature_info = []
+        transformed_parts = []
+
+        for j in range(x_raw.shape[1]):
+            col = x_raw[:, j]
+            unique_vals = np.unique(col)
+
+            is_integer_like = np.allclose(col, np.round(col))
+            is_categorical = is_integer_like and len(unique_vals) <= categorical_unique_threshold
+
+            if is_categorical:
+                feature_info.append({
+                    "type": "categorical",
+                    "categories": unique_vals
+                })
+
+                one_hot = np.zeros((x_raw.shape[0], len(unique_vals)), dtype=float)
+                for idx, cat in enumerate(unique_vals):
+                    one_hot[:, idx] = (col == cat).astype(float)
+                transformed_parts.append(one_hot)
+            else:
+
+                mean = float(np.mean(col))
+                std = float(np.std(col))
+                if std < 1e-12:
+                    std = 1.0
+
+                feature_info.append({
+                    "type": "continuous",
+                    "mean": mean,
+                    "std": std
+                })
+
+                values = ((col.reshape(-1, 1) - mean) / std).astype(float)
+                transformed_parts.append(values)
+
+        # Combine all transformed feature columns into one matrix
+        x = np.hstack(transformed_parts)
+
+        bias = np.ones((x.shape[0], 1), dtype=float)
+        x = np.hstack((bias, x))
+
+        # Save preprocessing info for prediction
+        self.model_state["logreg_feature_info"] = feature_info
+
+        class_to_index = {label: idx for idx, label in enumerate(classes)}
+        y_indices = np.array([class_to_index[label] for label in y_raw], dtype=int)
+
+        y = np.zeros((x.shape[0], n_classes), dtype=float)
+        y[np.arange(x.shape[0]), y_indices] = 1.0
+
+        w = np.zeros((x.shape[1], n_classes), dtype=float)
+
+        for _ in range(int(num_iterations)):
+            scores = np.dot(x, w)
+
+            shifted = scores - np.max(scores, axis=1, keepdims=True)
+            exp_scores = np.exp(shifted)
+            probs = exp_scores / np.sum(exp_scores, axis=1, keepdims=True)
+
+            grad = np.dot(x.T, (probs - y)) / float(x.shape[0])
+
+            # Add L2 regularization term
+            reg_term = (reg_strength / float(x.shape[0])) * w
+            reg_term[0, :] = 0.0
+            grad += reg_term
+
+            w -= learning_rate * grad
+
+        self.model_state["logreg_weights"] = w
 
     def _predict_logistic_regression(self, sample):
         """
         Predict a label for one sample using the trained Logistic Regression model.
         """
-        raise NotImplementedError("Logistic Regression prediction has not been implemented yet.")
+        if "logreg_weights" not in self.model_state:
+            raise ValueError("Logistic Regression model has not been trained yet.")
+
+        # Extract raw feature values from the sample
+        x_raw = np.asarray(sample[1:], dtype=float)
+        feature_info = self.model_state["logreg_feature_info"]
+
+        transformed_parts = []
+
+        for j, info in enumerate(feature_info):
+            value = x_raw[j]
+
+            if info["type"] == "categorical":
+
+                categories = info["categories"]
+                one_hot = np.zeros((1, len(categories)), dtype=float)
+
+                for idx, cat in enumerate(categories):
+                    if value == cat:
+                        one_hot[0, idx] = 1.0
+
+                transformed_parts.append(one_hot)
+            else:
+
+                val = np.array([[float(value)]], dtype=float)
+                val = (val - info["mean"]) / info["std"]
+                transformed_parts.append(val)
+
+        x = np.hstack(transformed_parts)
+
+        bias = np.ones((1, 1), dtype=float)
+        x = np.hstack((bias, x))
+
+        # Compute class scores
+        w = self.model_state["logreg_weights"]
+        scores = np.dot(x, w)
+
+        # Select the class with the highest score
+        pred_index = int(np.argmax(scores, axis=1)[0])
+
+        # Return the predicted class label
+        return self.model_state["classes"][pred_index]
 
     def _train_decision_tree(self, training_data):
         """
