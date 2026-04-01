@@ -216,6 +216,7 @@ class Classifier:
         if learning_rate is None:
             learning_rate = 0.1
 
+        # 没给参数用默认值
         num_iterations = self.params.get("num_iterations")
         if num_iterations is None:
             num_iterations = 3000
@@ -228,10 +229,11 @@ class Classifier:
         if categorical_unique_threshold is None:
             categorical_unique_threshold = 20
 
-        # Fit preprocessing rules on training data
+        # 记录处理方式
         feature_info = []
         transformed_parts = []
 
+        # 判断资料要怎么处理
         for j in range(x_raw.shape[1]):
             col = x_raw[:, j]
             unique_vals = np.unique(col)
@@ -265,13 +267,13 @@ class Classifier:
                 values = ((col.reshape(-1, 1) - mean) / std).astype(float)
                 transformed_parts.append(values)
 
-        # Combine all transformed feature columns into one matrix
+        # 把所有处理好的合在一起
         x = np.hstack(transformed_parts)
 
         bias = np.ones((x.shape[0], 1), dtype=float)
         x = np.hstack((bias, x))
 
-        # Save preprocessing info for prediction
+        # predict用同样规则处理资料
         self.model_state["logreg_feature_info"] = feature_info
 
         class_to_index = {label: idx for idx, label in enumerate(classes)}
@@ -291,7 +293,7 @@ class Classifier:
 
             grad = np.dot(x.T, (probs - y)) / float(x.shape[0])
 
-            # Add L2 regularization term
+            # 加L2 regularization
             reg_term = (reg_strength / float(x.shape[0])) * w
             reg_term[0, :] = 0.0
             grad += reg_term
@@ -307,12 +309,11 @@ class Classifier:
         if "logreg_weights" not in self.model_state:
             raise ValueError("Logistic Regression model has not been trained yet.")
 
-        # Extract raw feature values from the sample
         x_raw = np.asarray(sample[1:], dtype=float)
         feature_info = self.model_state["logreg_feature_info"]
 
         transformed_parts = []
-
+        # 用training时同样的方法处理资料
         for j, info in enumerate(feature_info):
             value = x_raw[j]
 
@@ -332,19 +333,19 @@ class Classifier:
                 val = (val - info["mean"]) / info["std"]
                 transformed_parts.append(val)
 
+        # 把所有处理好的合在一起
         x = np.hstack(transformed_parts)
 
         bias = np.ones((1, 1), dtype=float)
         x = np.hstack((bias, x))
 
-        # Compute class scores
+        # 算每个 class 的分数
         w = self.model_state["logreg_weights"]
         scores = np.dot(x, w)
 
-        # Select the class with the highest score
+        # 选分数最高的 class
         pred_index = int(np.argmax(scores, axis=1)[0])
 
-        # Return the predicted class label
         return self.model_state["classes"][pred_index]
 
     def _train_decision_tree(self, training_data):
