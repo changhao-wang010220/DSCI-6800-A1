@@ -191,16 +191,97 @@ class Classifier:
         print("Recall: {:.4f}".format(metrics["recall"]))
 
     def _train_naive_bayes(self, training_data):
-        """
-        Train the Naive Bayes model and store learned parameters in self.model_state.
-        """
-        raise NotImplementedError("Naive Bayes training has not been implemented yet.")
+        labels = training_data[:, 0]
+        features = training_data[:, 1:]
+        classes = self.model_state["classes"]
+
+        #smoothing 避免机率变成 0
+        smoothing = 1
+
+        #判断资料是连续还是离散
+        num_unique = np.mean([len(np.unique(features[:, j])) for j in range(features.shape[1])])
+        is_continuous = num_unique > 10
+        self.model_state["is_continuous"] = is_continuous
+
+        #算每个 class 的机率 P(y)
+        class_priors = {}
+        for c in classes:
+            class_priors[c] = np.sum(labels == c) / len(labels)
+        self.model_state["class_priors"] = class_priors
+
+        if is_continuous:
+            #如果是连续资料，存每個 class 每個 feature 的 mean 和 std
+            means = {}
+            stds = {}
+            for c in classes:
+                class_features = features[labels == c]
+                means[c] = np.mean(class_features, axis=0)
+                #算标准差，代表分布的范围，加 1e-9 避免除以 0
+                stds[c] = np.std(class_features, axis=0) + 1e-9
+            self.model_state["means"] = means
+            self.model_state["stds"] = stds
+
+        else:
+            #如果是离散资料，记录每个 feature 可能出现的值
+            feature_values = {}
+            for j in range(features.shape[1]):
+                feature_values[j] = np.unique(features[:, j])
+            self.model_state["feature_values"] = feature_values
+
+            #存条件机率 P(x|y)
+            cond_probs = {}
+            for c in classes:
+                cond_probs[c] = {}
+                class_features = features[labels == c]
+                for j in range(features.shape[1]):
+                    cond_probs[c][j] = {}
+                    values = feature_values[j]
+                    for v in values:
+                        count = np.sum(class_features[:, j] == v)
+                        total = len(class_features)
+                        #加 smoothing，避免机率为 0
+                        prob = (count + smoothing) / (total + smoothing * len(values))
+                        cond_probs[c][j][v] = prob
+            self.model_state["cond_probs"] = cond_probs
+
 
     def _predict_naive_bayes(self, sample):
-        """
-        Predict a label for one sample using the trained Naive Bayes model.
-        """
-        raise NotImplementedError("Naive Bayes prediction has not been implemented yet.")
+        features = sample[1:]
+        classes = self.model_state["classes"]
+        class_priors = self.model_state["class_priors"]
+
+        #看 training 时判断是连续还是离散
+        is_continuous = self.model_state["is_continuous"]
+
+        #用来记录最佳答案
+        best_class = None
+        best_log_prob = -np.inf
+
+        for c in classes:
+            log_prob = np.log(class_priors[c])
+
+            if is_continuous:
+                #如果是连续资料，用常态分佈算机率
+                mu = self.model_state["means"][c]
+                sigma = self.model_state["stds"][c]
+                log_prob += np.sum(
+                    -0.5 * np.log(2 * np.pi * sigma ** 2)
+                    - ((features - mu) ** 2) / (2 * sigma ** 2)
+                )
+            else:
+                #如果是离散资料，就直接查表
+                cond_probs = self.model_state["cond_probs"]
+                #如果这个值在 training 有出现过，就加上对应机率
+                for j, v in enumerate(features):
+                    if v in cond_probs[c][j]:
+                        log_prob += np.log(cond_probs[c][j][v])
+
+            #找出机率最大的 class
+            if log_prob > best_log_prob:
+                best_log_prob = log_prob
+                best_class = c
+
+        return best_class
 
     def _train_logistic_regression(self, training_data):
         """
